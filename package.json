@@ -1,0 +1,13 @@
+{
+  "name": "void-remote-control",
+  "version": "1.0.0",
+  "description": "Chrome extension for gesture-based browser scroll control using hand tracking",
+  "private": true,
+  "scripts": {
+    "build": "node build.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.18"
+  }
+}

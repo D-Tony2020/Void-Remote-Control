@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Void Remote Control",
+  "version": "1.0.0",
+  "description": "Hand gesture-based browser scroll control for comfortable long-form reading",
+  "permissions": [
+    "activeTab",
+    "sidePanel",
+    "scripting"
+  ],
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/content.js"]
+    }
+  ],
+  "action": {
+    "default_title": "Toggle Gesture Scroll Control"
+  },
+  "icons": {}
+}
