@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Void Remote Control",
   "version": "1.0.0",
-  "description": "Hand gesture-based browser scroll control for comfortable long-form reading",
+  "description": "Hand gesture-based browser scroll control for comfortable long-form reading (Edge/Chrome)",
   "permissions": [
     "activeTab",
     "sidePanel",

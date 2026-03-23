@@ -50,4 +50,6 @@ if (fs.existsSync(wasmSrcDir)) {
 }
 
 console.log('Build complete! Extension assembled in dist/');
-console.log('Load dist/ as an unpacked extension in chrome://extensions');
+console.log('Load dist/ as an unpacked extension:');
+console.log('  Edge:   edge://extensions  → Developer mode → Load unpacked → select dist/');
+console.log('  Chrome: chrome://extensions → Developer mode → Load unpacked → select dist/');
