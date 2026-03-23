@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Void Remote Control</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Void Remote</h1>
+      <span id="status-badge" class="badge badge-idle">待机</span>
+    </header>
+
+    <div id="camera-container" class="camera-container">
+      <video id="camera" autoplay playsinline></video>
+      <canvas id="overlay"></canvas>
+      <div id="gesture-hint" class="gesture-hint">张开手掌开始控制</div>
+    </div>
+
+    <div class="controls">
+      <button id="toggle-btn" class="btn btn-primary">启动追踪</button>
+    </div>
+
+    <div class="settings">
+      <label class="setting-item">
+        <span>灵敏度</span>
+        <input type="range" id="sensitivity" min="1" max="10" value="5">
+        <span id="sensitivity-val">5</span>
+      </label>
+      <label class="setting-item">
+        <span>死区</span>
+        <input type="range" id="deadzone" min="1" max="20" value="8">
+        <span id="deadzone-val">8</span>
+      </label>
+    </div>
+
+    <div id="scroll-indicator" class="scroll-indicator">
+      <div class="arrow arrow-up" id="arrow-up">▲</div>
+      <div class="speed-bar">
+        <div id="speed-fill" class="speed-fill"></div>
+      </div>
+      <div class="arrow arrow-down" id="arrow-down">▼</div>
+    </div>
+
+    <div id="error-msg" class="error-msg" hidden></div>
+  </div>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
