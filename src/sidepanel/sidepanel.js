@@ -38,42 +38,112 @@ deadzoneInput.addEventListener('input', () => {
   deadzoneVal.textContent = deadzone;
 });
 
+// ─── Utility: Promise with timeout ───
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label}超时（${ms / 1000}秒）`)), ms)
+    )
+  ]);
+}
+
 // ─── MediaPipe Init ───
 async function initHandLandmarker() {
+  showProgress('正在加载手势识别引擎...');
+
+  let vision;
   try {
-    const vision = await FilesetResolver.forVisionTasks('../libs/wasm');
-    handLandmarker = await HandLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-        delegate: 'GPU'
-      },
-      runningMode: 'VIDEO',
-      numHands: 1,
-      minHandDetectionConfidence: 0.6,
-      minHandPresenceConfidence: 0.6,
-      minTrackingConfidence: 0.6
-    });
+    vision = await withTimeout(
+      FilesetResolver.forVisionTasks('../libs/wasm'),
+      15000,
+      'WASM引擎加载'
+    );
   } catch (err) {
-    showError(`模型加载失败: ${err.message}`);
+    showError(`WASM引擎加载失败: ${err.message}`);
     throw err;
   }
+
+  showProgress('正在下载手势模型...');
+
+  // Try GPU first, fallback to CPU
+  const delegates = ['GPU', 'CPU'];
+  let lastErr = null;
+
+  for (const delegate of delegates) {
+    try {
+      showProgress(`正在初始化模型 (${delegate})...`);
+      handLandmarker = await withTimeout(
+        HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+            delegate
+          },
+          runningMode: 'VIDEO',
+          numHands: 1,
+          minHandDetectionConfidence: 0.5,
+          minHandPresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        }),
+        30000,
+        '模型加载'
+      );
+      console.log(`HandLandmarker initialized with ${delegate} delegate`);
+      return; // success
+    } catch (err) {
+      console.warn(`${delegate} delegate failed:`, err.message);
+      lastErr = err;
+      // continue to next delegate
+    }
+  }
+
+  showError(`模型加载失败: ${lastErr.message}`);
+  throw lastErr;
 }
 
 // ─── Camera ───
 async function startCamera() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: 'user' }
-    });
-    video.srcObject = stream;
-    await video.play();
+  showProgress('正在请求摄像头权限...');
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+  let stream;
+  try {
+    stream = await withTimeout(
+      navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+      }),
+      10000,
+      '摄像头访问'
+    );
   } catch (err) {
-    showError(`摄像头访问失败: ${err.message}`);
+    let userMsg;
+    if (err.name === 'NotAllowedError' || err.message.includes('dismissed')) {
+      userMsg = '摄像头权限被拒绝。请在浏览器设置中允许此扩展访问摄像头。';
+    } else if (err.name === 'NotFoundError') {
+      userMsg = '未检测到摄像头设备。';
+    } else if (err.name === 'NotReadableError') {
+      userMsg = '摄像头被其他应用占用。';
+    } else {
+      userMsg = `摄像头访问失败: ${err.message}`;
+    }
+    showError(userMsg);
     throw err;
   }
+
+  video.srcObject = stream;
+
+  // Wait for video metadata to be ready before playing
+  await new Promise((resolve, reject) => {
+    video.onloadedmetadata = resolve;
+    video.onerror = () => reject(new Error('视频流加载失败'));
+    // Safety timeout in case metadata never fires
+    setTimeout(() => reject(new Error('视频元数据加载超时')), 5000);
+  });
+
+  await video.play();
+
+  // Now videoWidth/videoHeight are guaranteed to be valid
+  canvas.width = video.videoWidth || 640;
+  canvas.height = video.videoHeight || 480;
 }
 
 function stopCamera() {
@@ -89,7 +159,6 @@ function isFingerExtended(landmarks, tipIdx, pipIdx) {
 }
 
 function isHandOpen(landmarks) {
-  // Check if at least 3 fingers are extended (index, middle, ring)
   const indexOpen = isFingerExtended(landmarks, 8, 6);
   const middleOpen = isFingerExtended(landmarks, 12, 10);
   const ringOpen = isFingerExtended(landmarks, 16, 14);
@@ -100,14 +169,20 @@ function isHandOpen(landmarks) {
 }
 
 function getPalmCenterY(landmarks) {
-  // Average of wrist (0) and middle finger MCP (9)
   return (landmarks[0].y + landmarks[9].y) / 2;
 }
 
 function processFrame() {
   if (!isRunning || !handLandmarker) return;
 
-  const result = handLandmarker.detectForVideo(video, performance.now());
+  let result;
+  try {
+    result = handLandmarker.detectForVideo(video, performance.now());
+  } catch (err) {
+    console.error('Detection error:', err);
+    animFrameId = requestAnimationFrame(processFrame);
+    return;
+  }
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -123,20 +198,18 @@ function processFrame() {
       if (lastPalmY !== null) {
         const rawDelta = palmYPixel - lastPalmY;
 
-        // Apply deadzone
         if (Math.abs(rawDelta) > deadzone) {
           const activeDelta = rawDelta > 0
             ? rawDelta - deadzone
             : rawDelta + deadzone;
 
-          // Exponential smoothing
           smoothedDelta = smoothedDelta * 0.6 + activeDelta * 0.4;
 
           const scrollSpeed = smoothedDelta * sensitivity * 0.5;
           sendScrollCommand(scrollSpeed);
           updateScrollUI(scrollSpeed);
         } else {
-          smoothedDelta *= 0.8; // Decay toward zero
+          smoothedDelta *= 0.8;
           if (Math.abs(smoothedDelta) < 0.5) {
             sendScrollCommand(0);
             updateScrollUI(0);
@@ -148,7 +221,6 @@ function processFrame() {
       setStatus('tracking', '追踪中');
       gestureHint.textContent = '手掌移动控制滚动';
     } else {
-      // Hand detected but closed — pause
       lastPalmY = null;
       smoothedDelta = 0;
       sendScrollCommand(0);
@@ -157,7 +229,6 @@ function processFrame() {
       gestureHint.textContent = '张开手掌继续';
     }
   } else {
-    // No hand
     lastPalmY = null;
     smoothedDelta = 0;
     sendScrollCommand(0);
@@ -171,16 +242,15 @@ function processFrame() {
 
 // ─── Drawing ───
 const CONNECTIONS = [
-  [0,1],[1,2],[2,3],[3,4],       // Thumb
-  [0,5],[5,6],[6,7],[7,8],       // Index
-  [5,9],[9,10],[10,11],[11,12],  // Middle
-  [9,13],[13,14],[14,15],[15,16],// Ring
-  [13,17],[17,18],[18,19],[19,20],// Pinky
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],
   [0,17]
 ];
 
 function drawHand(landmarks) {
-  // Draw connections
   ctx.strokeStyle = 'rgba(167, 139, 250, 0.6)';
   ctx.lineWidth = 2;
   for (const [i, j] of CONNECTIONS) {
@@ -190,7 +260,6 @@ function drawHand(landmarks) {
     ctx.stroke();
   }
 
-  // Draw landmarks
   for (const lm of landmarks) {
     ctx.beginPath();
     ctx.arc(lm.x * canvas.width, lm.y * canvas.height, 4, 0, 2 * Math.PI);
@@ -198,7 +267,6 @@ function drawHand(landmarks) {
     ctx.fill();
   }
 
-  // Draw palm center
   const palmY = getPalmCenterY(landmarks);
   const palmX = (landmarks[0].x + landmarks[9].x) / 2;
   ctx.beginPath();
@@ -215,7 +283,6 @@ let lastSentSpeed = 0;
 let sendThrottleTimer = null;
 
 function sendScrollCommand(speed) {
-  // Throttle to ~30fps
   if (sendThrottleTimer) return;
 
   const roundedSpeed = Math.round(speed * 10) / 10;
@@ -226,6 +293,8 @@ function sendScrollCommand(speed) {
   chrome.runtime.sendMessage({
     type: roundedSpeed === 0 ? 'gesture-stop' : 'gesture-scroll',
     speed: roundedSpeed
+  }).catch(() => {
+    // Extension context invalidated — ignore
   });
 
   sendThrottleTimer = setTimeout(() => {
@@ -263,6 +332,18 @@ function updateScrollUI(speed) {
 function showError(msg) {
   errorMsg.textContent = msg;
   errorMsg.hidden = false;
+  errorMsg.classList.remove('progress');
+}
+
+function showProgress(msg) {
+  errorMsg.textContent = msg;
+  errorMsg.hidden = false;
+  errorMsg.classList.add('progress');
+}
+
+function hideMessages() {
+  errorMsg.hidden = true;
+  errorMsg.classList.remove('progress');
 }
 
 // ─── Toggle ───
@@ -277,6 +358,7 @@ toggleBtn.addEventListener('click', async () => {
 async function start() {
   toggleBtn.disabled = true;
   toggleBtn.textContent = '加载中...';
+  hideMessages();
 
   try {
     if (!handLandmarker) {
@@ -292,10 +374,12 @@ async function start() {
     toggleBtn.classList.add('active');
     toggleBtn.disabled = false;
     setStatus('active', '运行中');
-    errorMsg.hidden = true;
+    hideMessages();
 
     processFrame();
   } catch (err) {
+    console.error('Start failed:', err);
+    stopCamera();
     toggleBtn.textContent = '启动追踪';
     toggleBtn.disabled = false;
     setStatus('idle', '错误');
@@ -322,4 +406,5 @@ function stop() {
   toggleBtn.classList.remove('active');
   setStatus('idle', '待机');
   gestureHint.textContent = '张开手掌开始控制';
+  hideMessages();
 }

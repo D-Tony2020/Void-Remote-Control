@@ -4,14 +4,16 @@
 
 // Open side panel when clicking the extension icon
 chrome.action.onClicked.addListener((tab) => {
-  chrome.sidePanel.open({ tabId: tab.id });
+  chrome.sidePanel.open({ tabId: tab.id }).catch(() => {
+    // Side panel may already be open — ignore
+  });
 });
 
 // Route messages from side panel to active tab
 chrome.runtime.onMessage.addListener((msg, sender) => {
   if (msg.type === 'gesture-scroll' || msg.type === 'gesture-stop') {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) {
+      if (tabs[0]?.id) {
         chrome.tabs.sendMessage(tabs[0].id, msg).catch(() => {
           // Content script not loaded yet — ignore
         });
