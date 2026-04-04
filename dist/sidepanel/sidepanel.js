@@ -20,8 +20,7 @@ const errorMsg = document.getElementById('error-msg');
 let handLandmarker = null;
 let isRunning = false;
 let animFrameId = null;
-let lastPalmY = null;
-let smoothedDelta = 0;
+let smoothedSpeed = 0;
 
 // Configurable
 let sensitivity = 5;
@@ -158,18 +157,39 @@ function isFingerExtended(landmarks, tipIdx, pipIdx) {
   return landmarks[tipIdx].y < landmarks[pipIdx].y;
 }
 
-function isHandOpen(landmarks) {
+// Detect scroll gesture: index finger (8) and middle finger (12) both extended
+function isScrollGesture(landmarks) {
   const indexOpen = isFingerExtended(landmarks, 8, 6);
   const middleOpen = isFingerExtended(landmarks, 12, 10);
-  const ringOpen = isFingerExtended(landmarks, 16, 14);
-  const pinkyOpen = isFingerExtended(landmarks, 20, 18);
-
-  const count = [indexOpen, middleOpen, ringOpen, pinkyOpen].filter(Boolean).length;
-  return count >= 3;
+  return indexOpen && middleOpen;
 }
 
-function getPalmCenterY(landmarks) {
-  return (landmarks[0].y + landmarks[9].y) / 2;
+// Calculate scroll direction and speed from the angle between index and middle fingertips
+// Index above middle (dy > 0) → scroll down; middle above index → scroll up
+// Speed proportional to the tilt angle from horizontal
+function getScrollFromFingerAngle(landmarks) {
+  const indexTip = landmarks[8];
+  const middleTip = landmarks[12];
+
+  const dx = middleTip.x - indexTip.x;
+  const dy = middleTip.y - indexTip.y;
+
+  // Angle from horizontal (0 = level, π/2 = vertical)
+  const angle = Math.atan2(Math.abs(dy), Math.abs(dx));
+  // Normalize to 0–1 range (0° → 0, 90° → 1)
+  const strength = angle / (Math.PI / 2);
+
+  // Direction: dy > 0 means index is above middle → scroll down; dy < 0 → scroll up
+  const direction = dy > 0 ? 1 : -1;
+
+  return { strength, direction };
+}
+
+function getPalmCenter(landmarks) {
+  return {
+    x: (landmarks[0].x + landmarks[9].x) / 2,
+    y: (landmarks[0].y + landmarks[9].y) / 2
+  };
 }
 
 function processFrame() {
@@ -191,50 +211,43 @@ function processFrame() {
 
     drawHand(landmarks);
 
-    if (isHandOpen(landmarks)) {
-      const palmY = getPalmCenterY(landmarks);
-      const palmYPixel = palmY * canvas.height;
+    if (isScrollGesture(landmarks)) {
+      const { strength, direction } = getScrollFromFingerAngle(landmarks);
 
-      if (lastPalmY !== null) {
-        const rawDelta = palmYPixel - lastPalmY;
+      // deadzone: ignore small angles (strength 0–1, deadzone mapped to 0–0.2 range)
+      const deadzoneThreshold = deadzone * 0.01;
 
-        if (Math.abs(rawDelta) > deadzone) {
-          const activeDelta = rawDelta > 0
-            ? rawDelta - deadzone
-            : rawDelta + deadzone;
+      if (strength > deadzoneThreshold) {
+        const activeStrength = strength - deadzoneThreshold;
+        const rawSpeed = direction * activeStrength * sensitivity * 2;
+        smoothedSpeed = smoothedSpeed * 0.6 + rawSpeed * 0.4;
 
-          smoothedDelta = smoothedDelta * 0.6 + activeDelta * 0.4;
-
-          const scrollSpeed = smoothedDelta * sensitivity * 0.5;
-          sendScrollCommand(scrollSpeed);
-          updateScrollUI(scrollSpeed);
-        } else {
-          smoothedDelta *= 0.8;
-          if (Math.abs(smoothedDelta) < 0.5) {
-            sendScrollCommand(0);
-            updateScrollUI(0);
-          }
+        sendScrollCommand(smoothedSpeed);
+        updateScrollUI(smoothedSpeed);
+      } else {
+        smoothedSpeed *= 0.8;
+        if (Math.abs(smoothedSpeed) < 0.5) {
+          smoothedSpeed = 0;
+          sendScrollCommand(0);
+          updateScrollUI(0);
         }
       }
 
-      lastPalmY = palmYPixel;
       setStatus('tracking', '追踪中');
-      gestureHint.textContent = '手掌移动控制滚动';
+      gestureHint.textContent = '倾斜手指控制滚动';
     } else {
-      lastPalmY = null;
-      smoothedDelta = 0;
+      smoothedSpeed = 0;
       sendScrollCommand(0);
       updateScrollUI(0);
-      setStatus('active', '已暂停');
-      gestureHint.textContent = '张开手掌继续';
+      setStatus('active', '等待手势');
+      gestureHint.textContent = '伸出食指和中指开始';
     }
   } else {
-    lastPalmY = null;
-    smoothedDelta = 0;
+    smoothedSpeed = 0;
     sendScrollCommand(0);
     updateScrollUI(0);
     setStatus('active', '等待手势');
-    gestureHint.textContent = '将手掌对准摄像头';
+    gestureHint.textContent = '将手对准摄像头';
   }
 
   animFrameId = requestAnimationFrame(processFrame);
@@ -267,13 +280,22 @@ function drawHand(landmarks) {
     ctx.fill();
   }
 
-  const palmY = getPalmCenterY(landmarks);
-  const palmX = (landmarks[0].x + landmarks[9].x) / 2;
+  // Highlight index tip (8) and middle tip (12)
+  for (const idx of [8, 12]) {
+    ctx.beginPath();
+    ctx.arc(landmarks[idx].x * canvas.width, landmarks[idx].y * canvas.height, 8, 0, 2 * Math.PI);
+    ctx.fillStyle = 'rgba(124, 58, 237, 0.5)';
+    ctx.fill();
+    ctx.strokeStyle = '#7c3aed';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Draw line between index and middle fingertips
   ctx.beginPath();
-  ctx.arc(palmX * canvas.width, palmY * canvas.height, 8, 0, 2 * Math.PI);
-  ctx.fillStyle = 'rgba(124, 58, 237, 0.5)';
-  ctx.fill();
-  ctx.strokeStyle = '#7c3aed';
+  ctx.moveTo(landmarks[8].x * canvas.width, landmarks[8].y * canvas.height);
+  ctx.lineTo(landmarks[12].x * canvas.width, landmarks[12].y * canvas.height);
+  ctx.strokeStyle = 'rgba(251, 191, 36, 0.7)';
   ctx.lineWidth = 2;
   ctx.stroke();
 }
@@ -367,8 +389,7 @@ async function start() {
     await startCamera();
 
     isRunning = true;
-    lastPalmY = null;
-    smoothedDelta = 0;
+    smoothedSpeed = 0;
 
     toggleBtn.textContent = '停止追踪';
     toggleBtn.classList.add('active');
@@ -399,12 +420,11 @@ function stop() {
   sendScrollCommand(0);
   updateScrollUI(0);
 
-  lastPalmY = null;
-  smoothedDelta = 0;
+  smoothedSpeed = 0;
 
   toggleBtn.textContent = '启动追踪';
   toggleBtn.classList.remove('active');
   setStatus('idle', '待机');
-  gestureHint.textContent = '张开手掌开始控制';
+  gestureHint.textContent = '伸出食指和中指开始';
   hideMessages();
 }

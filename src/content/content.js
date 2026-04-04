@@ -17,11 +17,37 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 });
 
+function findScrollableElement() {
+  // Try the element currently under the viewport center
+  const centerEl = document.elementFromPoint(
+    window.innerWidth / 2,
+    window.innerHeight / 2
+  );
+
+  // Walk up from center element to find the nearest scrollable container
+  let el = centerEl;
+  while (el && el !== document.documentElement) {
+    const style = getComputedStyle(el);
+    const overflowY = style.overflowY;
+    if (
+      (overflowY === 'auto' || overflowY === 'scroll') &&
+      el.scrollHeight > el.clientHeight
+    ) {
+      return el;
+    }
+    el = el.parentElement;
+  }
+
+  // Fallback to documentElement or body
+  return document.scrollingElement || document.documentElement;
+}
+
 function smoothScroll() {
   if (!isScrolling) return;
 
   if (Math.abs(scrollSpeed) > 0.3) {
-    window.scrollBy({ top: scrollSpeed, behavior: 'instant' });
+    const target = findScrollableElement();
+    target.scrollBy({ top: scrollSpeed, behavior: 'instant' });
     requestAnimationFrame(smoothScroll);
   } else {
     isScrolling = false;
